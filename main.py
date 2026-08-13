@@ -1,62 +1,79 @@
-from fastapi import FastAPI, HTTPException
-import requests
 import os
+import requests
+from fastapi import FastAPI, Request
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 
-# Безопасно получаем ключ из переменных окружения Render
+# Получаем токены из переменных окружения Render
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUNO_API_KEY = os.getenv("SUNO_API_KEY")
 
-# Если ключа нет, бот всё равно запустится, но выдаст ошибку при генерации
-if not SUNO_API_KEY:
-    print("⚠️ ВНИМАНИЕ: Не найден SUNO_API_KEY. Добавьте его в Environment Variables!")
+# URL для отправки сообщений в Telegram
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 @app.get("/")
 def root():
-    return {"message": "Music bot is alive! (Suno ready)"}
+    return {"message": "Telegram bot is alive!"}
 
-@app.get("/generate")
-def generate(prompt: str):
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Пожалуйста, укажите prompt")
-    
-    if not SUNO_API_KEY:
-        raise HTTPException(status_code=500, detail="API ключ не настроен на сервере")
-    
+@app.post("/webhook")
+async def webhook(request: Request):
     try:
-        # ❗ ВНИМАНИЕ: Эндпоинты и формат Suno могут меняться!
-        # Проверьте актуальную документацию Suno API.
-        # Ниже примерный формат (уточните по вашей документации):
-        url = "https://api.suno.ai/v1/generate"  
-        
-        headers = {
-            "Authorization": f"Bearer {SUNO_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "prompt": prompt,
-            "duration": 30,
-            "style": "pop"  # можно заменить на любой стиль
-        }
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=60)
-        
-        # Если Suno возвращает не 200, выбрасываем ошибку
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        return {
-            "status": "success",
-            "prompt": prompt,
-            "track_url": data.get("audio_url"),  # Поле зависит от ответа Suno!
-            "raw_response": data  # На всякий случай, чтобы посмотреть структуру
-        }
-        
-    except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="API Suno не ответил за 60 секунд")
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка запроса к Suno: {str(e)}")
+        data = await request.json()
+        logging.info(f"Получено обновление: {data}")
+
+        # Проверяем, есть ли сообщение от пользователя
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+
+            # Если пользователь написал /start
+            if text == "/start":
+                reply = "Привет! Я музыкальный бот. Отправь мне любой текст, и я попробую сгенерировать для тебя трек через Suno API! 🎵"
+                requests.post(TELEGRAM_URL, json={"chat_id": chat_id, "text": reply})
+                return {"status": "ok"}
+
+            # Если пользователь отправил текст (промпт)
+            elif text:
+                # Сообщаем, что начали генерацию
+                requests.post(TELEGRAM_URL, json={
+                    "chat_id": chat_id, 
+                    "text": "🎧 Начинаю генерацию музыки по твоему запросу, подожди немного..."
+                })
+
+                # Отправляем запрос в Suno API
+                try:
+                    suno_url = "https://api.suno.ai/v1/generate"  # Уточните URL!
+                    headers = {
+                        "Authorization": f"Bearer {SUNO_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {"prompt": text, "duration": 30}
+                    
+                    response = requests.post(suno_url, json=payload, headers=headers, timeout=60)
+                    data_suno = response.json()
+                    
+                    # Предположим, что ссылка лежит в поле "audio_url" (уточните по документации!)
+                    track_url = data_suno.get("audio_url", "Ссылка не найдена :(")
+                    
+                    # Отправляем результат пользователю
+                    requests.post(TELEGRAM_URL, json={
+                        "chat_id": chat_id,
+                        "text": f"✅ Готово! Вот твой трек:\n{track_url}"
+                    })
+                    
+                except Exception as e:
+                    requests.post(TELEGRAM_URL, json={
+                        "chat_id": chat_id,
+                        "text": f"❌ Ошибка при генерации: {str(e)}"
+                    })
+                
+                return {"status": "ok"}
+
+        return {"status": "ignored"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Неизвестная ошибка: {str(e)}")
+        logging.error(f"Ошибка: {str(e)}")
+        return {"status": "error"}
