@@ -81,18 +81,19 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     upload_response = requests.post(upload_url, headers=upload_headers, data=data, files=files)
     
     if upload_response.status_code != 200:
-        raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
+        raise Exception(f"Ошибка загрузки: {upload_response.text}")
     
     upload_data = upload_response.json()
     
-    # !!! ВОТ ЗДЕСЬ ИСПРАВЛЕНИЕ !!!
+    # Берём ссылку прямо из ответа
     file_url = upload_data.get("downloadUrl")
     
     if not file_url:
-        logging.error(f"НЕОЖИДАННЫЙ ОТВЕТ SUNO: {upload_data}")
-        raise Exception("Suno вернул неожиданную структуру ответа. Смотрите логи.")
+        # Если ссылки нет — выводим весь ответ в логи и падаем
+        logging.error(f"ПОЛНЫЙ ОТВЕТ SUNO: {json.dumps(upload_data, indent=2)}")
+        raise Exception("Suno не вернул downloadUrl. Смотрите логи выше.")
     
-    logging.info(f"Файл успешно загружен в Suno: {file_url}")
+    logging.info(f"✅ Файл загружен: {file_url}")
     
     cover_url = f"{SUNO_BASE}/api/cover-upload"
     cover_payload = {
@@ -104,12 +105,12 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     
     cover_response = requests.post(cover_url, headers=SUNO_HEAD, json=cover_payload, timeout=30)
     if cover_response.status_code != 200:
-        raise Exception(f"Ошибка при создании кавера: {cover_response.text}")
+        raise Exception(f"Ошибка cover: {cover_response.text}")
     
     cover_data = cover_response.json()
     task_id = cover_data.get("data", {}).get("taskId")
     if not task_id:
-        raise Exception("Не удалось получить taskId для генерации кавера")
+        raise Exception(f"Не найден taskId. Ответ: {cover_data}")
     
     start_time = time.time()
     while time.time() - start_time < 300:
@@ -128,7 +129,7 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
         elif "FAIL" in status or "ERROR" in status:
             raise Exception(status_data.get("errorMessage") or status)
     
-    raise Exception("Таймаут ожидания генерации кавера")
+    raise Exception("Таймаут ожидания")
 
 # ================================
 # ОСНОВНОЙ ВЕБХУК
