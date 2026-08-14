@@ -77,18 +77,17 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
         "model": "V5_5"
     }
     
-    # ПРАВИЛЬНЫЙ СПОСОБ: оставляем headers с токеном, но НЕ указываем Content-Type
-    upload_headers = {
-        "Authorization": f"Bearer {SUNO_API_KEY}"
-    }
-    
+    upload_headers = {"Authorization": f"Bearer {SUNO_API_KEY}"}
     upload_response = requests.post(upload_url, headers=upload_headers, data=data, files=files)
     
     if upload_response.status_code != 200:
         raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
     
     upload_data = upload_response.json()
-    file_url = upload_data.get("data", {}).get("fileUrl")
+    
+    # !!! ВОТ ЗДЕСЬ ИСПРАВЛЕНИЕ !!!
+    file_url = upload_data.get("downloadUrl")
+    
     if not file_url:
         logging.error(f"НЕОЖИДАННЫЙ ОТВЕТ SUNO: {upload_data}")
         raise Exception("Suno вернул неожиданную структуру ответа. Смотрите логи.")
