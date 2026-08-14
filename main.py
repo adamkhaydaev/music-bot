@@ -20,7 +20,6 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 PRICE_IN_STARS = 1
 
 # Хранилище временных данных пользователей (в памяти)
-# В реальном проекте лучше использовать Redis или базу данных
 user_sessions = {}
 
 @app.get("/")
@@ -49,11 +48,9 @@ async def webhook(request: Request):
             chat_id = data["message"]["chat"]["id"]
             prompt = data["message"]["text"]
 
-            # Игнорируем команду /start, если она уже обработана выше
             if prompt == "/start":
                 return {"status": "ok"}
 
-            # Сохраняем промпт в сессию пользователя
             user_sessions[chat_id] = {"prompt": prompt, "paid": False}
 
             # Создаём инвойс для оплаты звёздами
@@ -62,7 +59,7 @@ async def webhook(request: Request):
                 "title": "Генерация музыки через Suno AI 🎵",
                 "description": f"Создание трека по запросу: '{prompt[:30]}...'",
                 "payload": f"generate_{chat_id}",
-                "currency": "XTR",  # XTR = Telegram Stars
+                "currency": "XTR",
                 "prices": [{"label": "Генерация 1 трека", "amount": PRICE_IN_STARS}],
                 "need_name": False,
                 "need_phone_number": False,
@@ -88,20 +85,18 @@ async def webhook(request: Request):
         if "message" in data and "successful_payment" in data["message"]:
             chat_id = data["message"]["chat"]["id"]
             
-            # Помечаем, что пользователь оплатил
             if chat_id in user_sessions:
                 user_sessions[chat_id]["paid"] = True
                 prompt = user_sessions[chat_id]["prompt"]
                 
-                # Отправляем сообщение о начале генерации
                 requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                     "chat_id": chat_id,
                     "text": "✅ Оплата получена! 🎧 Начинаю генерацию музыки, подожди немного..."
                 })
 
-                # --- ВЫЗОВ SUNO API ---
+                # --- ВЫЗОВ SUNO API С БЕЗОПАСНОЙ ОБРАБОТКОЙ ---
                 try:
-                    # Проверьте актуальный URL и payload в документации Suno!
+                    # АКТУАЛЬНЫЙ URL ДЛЯ SUNO (если этот не работает, замените его)
                     suno_url = "https://api.suno.ai/v1/generate"
                     headers = {
                         "Authorization": f"Bearer {SUNO_API_KEY}",
@@ -113,24 +108,38 @@ async def webhook(request: Request):
                         "style": "pop"
                     }
                     
-                    suno_response = requests.post(suno_url, json=payload, headers=headers, timeout=60)
-                    suno_data = suno_response.json()
+                    # Отправляем запрос
+                    suno_response = requests.post(suno_url, json=payload, headers=headers, timeout=30)
+                    
+                    # ЛОГИРУЕМ ЧТО ПРИШЛО ОТ SUNO (Статус и Текст)
+                    logging.info(f"=== ОТВЕТ SUNO API ===")
+                    logging.info(f"Статус код: {suno_response.status_code}")
+                    logging.info(f"Тело ответа: {suno_response.text}")
+                    
+                    # Если код не 200, выбрасываем ошибку с текстом
+                    if suno_response.status_code != 200:
+                        raise Exception(f"Suno вернул код {suno_response.status_code}: {suno_response.text}")
+                    
+                    # Пытаемся распарсить JSON
+                    try:
+                        suno_data = suno_response.json()
+                    except json.JSONDecodeError:
+                        raise Exception(f"Ошибка JSON: Suno вернул не JSON, а: {suno_response.text[:200]}")
                     
                     track_url = suno_data.get("audio_url", "Ссылка не найдена :(")
                     
-                    # Отправляем результат пользователю
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
                         "text": f"🎶 Готово! Вот твой трек:\n{track_url}"
                     })
                     
                 except Exception as e:
+                    logging.error(f"Ошибка при генерации: {str(e)}")
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
                         "text": f"❌ Ошибка при генерации: {str(e)}"
                     })
                 
-                # Очищаем сессию после генерации
                 if chat_id in user_sessions:
                     del user_sessions[chat_id]
                 
