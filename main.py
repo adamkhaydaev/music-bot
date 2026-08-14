@@ -77,8 +77,12 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
         "model": "V5_5"
     }
     
-    # ВАЖНО: Убираем SUNO_HEAD. requests сам поставит Content-Type: multipart/form-data
-    upload_response = requests.post(upload_url, data=data, files=files)
+    # ПРАВИЛЬНЫЙ СПОСОБ: оставляем headers с токеном, но НЕ указываем Content-Type
+    upload_headers = {
+        "Authorization": f"Bearer {SUNO_API_KEY}"
+    }
+    
+    upload_response = requests.post(upload_url, headers=upload_headers, data=data, files=files)
     
     if upload_response.status_code != 200:
         raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
