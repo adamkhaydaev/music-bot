@@ -77,7 +77,12 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
         raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
     
     upload_data = upload_response.json()
-    file_url = upload_data["data"]["fileUrl"]
+    file_url = upload_data.get("data", {}).get("fileUrl")
+    if not file_url:
+        # Если структура не та, просто логируем весь ответ и возвращаем ошибку
+        logging.error(f"НЕОЖИДАННЫЙ ОТВЕТ SUNO: {upload_data}")
+        raise Exception("Suno вернул неожиданную структуру ответа. Смотрите логи.")
+    
     logging.info(f"Файл успешно загружен в Suno: {file_url}")
     
     cover_url = f"{SUNO_BASE}/api/cover-upload"
