@@ -66,25 +66,32 @@ def generate_yandex_tts(text: str):
     raise Exception("Не удалось найти рабочий голос в Яндексе")
 
 def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
-    """Загружает MP3 на сервер Suno через URL-метод (согласно документации)"""
-    
     upload_url = f"{SUNO_BASE}/api/file-stream-upload"
-    files = {"file": ("voice.mp3", mp3_bytes, "audio/mpeg")}
-    data = {"uploadPath": "voice-uploads"}
     
-    upload_response = requests.post(upload_url, headers=SUNO_HEAD, files=files, data=data)
+    # Теперь мы отправляем ВСЁ через multipart/form-data
+    files = {"file": ("voice.mp3", mp3_bytes, "audio/mpeg")}
+    data = {
+        "uploadPath": "voice-uploads",
+        "fileName": "voice.mp3",
+        "title": title,
+        "style": "Caucasian pop, emotional, male vocal",
+        "model": "V5_5"
+    }
+    
+    # ВАЖНО: Используем data=, а не json=, и убираем заголовок Content-Type (requests сам его поставит)
+    upload_response = requests.post(upload_url, headers=SUNO_HEAD, data=data, files=files)
     if upload_response.status_code != 200:
         raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
     
     upload_data = upload_response.json()
     file_url = upload_data.get("data", {}).get("fileUrl")
     if not file_url:
-        # Если структура не та, просто логируем весь ответ и возвращаем ошибку
         logging.error(f"НЕОЖИДАННЫЙ ОТВЕТ SUNO: {upload_data}")
         raise Exception("Suno вернул неожиданную структуру ответа. Смотрите логи.")
     
     logging.info(f"Файл успешно загружен в Suno: {file_url}")
     
+    # Дальше всё как было...
     cover_url = f"{SUNO_BASE}/api/cover-upload"
     cover_payload = {
         "fileUrl": file_url,
