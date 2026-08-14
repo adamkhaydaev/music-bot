@@ -2,7 +2,7 @@ import os
 import requests
 import json
 import logging
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -110,14 +110,26 @@ async def webhook(request: Request):
                 })
 
                 try:
-                    # АКТУАЛЬНЫЙ ЭНДПОИНТ ИЗ ДОКУМЕНТАЦИИ SUNOAPI.ORG
-                    suno_url = "https://api.sunoapi.org/generate"
+                    # ==========================================
+                    # БАЗОВЫЙ URL И ЗАГОЛОВКИ (КАК В ВАШЕМ СТАРОМ КОДЕ)
+                    # ==========================================
+                    BASE_URL = "https://api.sunoapi.org"
                     headers = {
                         "Authorization": f"Bearer {SUNO_API_KEY}",
                         "Content-Type": "application/json"
                     }
                     
-                    # ПАРАМЕТРЫ ДЛЯ ГЕНЕРАЦИИ (С МОДЕЛЬЮ V5_5)
+                    # ВЫБЕРИТЕ ПУТЬ (ЭНДПОИНТ) ИЗ ТРЁХ ВАРИАНТОВ НИЖЕ:
+                    # Вариант A (самый частый):
+                    suno_url = BASE_URL + "/generate"
+                    
+                    # Вариант B (если нужен /music):
+                    # suno_url = BASE_URL + "/music"
+                    
+                    # Вариант C (если нужен /v1/generate):
+                    # suno_url = BASE_URL + "/v1/generate"
+
+                    # ПАРАМЕТРЫ ДЛЯ ГЕНЕРАЦИИ (если нужно, поменяйте поля)
                     payload = {
                         "prompt": prompt,
                         "model": "V5_5",
