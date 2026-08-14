@@ -1,74 +1,6 @@
-import os
-import requests
-import logging
-import time
-import json
-from fastapi import FastAPI, Request
-
-logging.basicConfig(level=logging.INFO)
-app = FastAPI()
-
-# Переменные окружения
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
-SUNO_API_KEY = os.getenv("SUNO_API_KEY")
-
-TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-PRICE_IN_STARS = 1
-
-# Временные сессии пользователей
-user_sessions = {}
-
-# ================================
-# БАЗОВЫЕ НАСТРОЙКИ SUNO (ИЗ ВАШЕЙ ДОКУМЕНТАЦИИ)
-# ================================
-SUNO_BASE = "https://sunoapiorg.redpandaai.co"
-SUNO_HEAD = {
-    "Authorization": f"Bearer {SUNO_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# ================================
-# ФУНКЦИИ-ПОМОЩНИКИ
-# ================================
-
-def refundStars(chat_id: int, telegram_payment_charge_id: str):
-    """Возвращает звёзды пользователю при ошибке"""
-    try:
-        url = f"{TELEGRAM_URL}/refundStarPayment"
-        payload = {"user_id": chat_id, "telegram_payment_charge_id": telegram_payment_charge_id}
-        requests.post(url, json=payload, timeout=10)
-        return True
-    except:
-        return False
-
-def generate_yandex_tts(text: str):
-    url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
-    headers = {"Authorization": f"Api-Key {YANDEX_API_KEY}"}
-    
-    # Сначала пробуем мужской голос (alexander). Если нет — женский (oksana).
-    for voice in ["alexander", "oksana"]:
-        try:
-            params = {
-                "text": text,
-                "lang": "ru-RU",
-                "voice": voice,
-                "format": "mp3",
-                "emotion": "good"
-            }
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-            if response.status_code == 200:
-                logging.info(f"✅ Бот выбрал голос: {voice}")
-                return response.content
-        except:
-            continue
-    
-    raise Exception("Не удалось найти рабочий голос в Яндексе")
-
 def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     upload_url = f"{SUNO_BASE}/api/file-stream-upload"
     
-    # Теперь мы отправляем ВСЁ через multipart/form-data
     files = {"file": ("voice.mp3", mp3_bytes, "audio/mpeg")}
     data = {
         "uploadPath": "voice-uploads",
@@ -78,8 +10,9 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
         "model": "V5_5"
     }
     
-    # ВАЖНО: Используем data=, а не json=, и убираем заголовок Content-Type (requests сам его поставит)
-    upload_response = requests.post(upload_url, headers=SUNO_HEAD, data=data, files=files)
+    # ВАЖНО: Убираем SUNO_HEAD. requests сам поставит Content-Type: multipart/form-data
+    upload_response = requests.post(upload_url, data=data, files=files)
+    
     if upload_response.status_code != 200:
         raise Exception(f"Ошибка загрузки файла в Suno: {upload_response.text}")
     
@@ -91,7 +24,6 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     
     logging.info(f"Файл успешно загружен в Suno: {file_url}")
     
-    # Дальше всё как было...
     cover_url = f"{SUNO_BASE}/api/cover-upload"
     cover_payload = {
         "fileUrl": file_url,
@@ -127,96 +59,3 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
             raise Exception(status_data.get("errorMessage") or status)
     
     raise Exception("Таймаут ожидания генерации кавера")
-
-# ================================
-# ОСНОВНОЙ ВЕБХУК
-# ================================
-
-@app.get("/")
-def root():
-    return {"message": "Chechen Song Bot with Yandex TTS + Suno Cover"}
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    try:
-        data = await request.json()
-        logging.info(f"Update: {data}")
-
-        if "message" in data and data["message"].get("text") == "/start":
-            chat_id = data["message"]["chat"]["id"]
-            reply = (
-                "🎵 Привет! Я создаю песни на чеченском языке!\n\n"
-                f"Стоимость: {PRICE_IN_STARS} ⭐ за трек.\n\n"
-                "Отправь мне текст песни, и я сделаю голосовой файл."
-            )
-            requests.post(f"{TELEGRAM_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
-            return {"status": "ok"}
-
-        if "message" in data and "text" in data["message"]:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"]["text"]
-
-            if text == "/start":
-                return {"status": "ok"}
-
-            user_sessions[chat_id] = {"text": text}
-
-            invoice_data = {
-                "chat_id": chat_id,
-                "title": "Чеченская песня 🎤",
-                "description": f"Создание трека по запросу: '{text[:30]}...'",
-                "payload": f"tts_{chat_id}",
-                "currency": "XTR",
-                "prices": [{"label": "1 трек", "amount": PRICE_IN_STARS}],
-            }
-            requests.post(f"{TELEGRAM_URL}/sendInvoice", json=invoice_data)
-            return {"status": "invoice_sent"}
-
-        if "pre_checkout_query" in data:
-            query_id = data["pre_checkout_query"]["id"]
-            requests.post(f"{TELEGRAM_URL}/answerPreCheckoutQuery", json={
-                "pre_checkout_query_id": query_id,
-                "ok": True
-            })
-            return {"status": "ok"}
-
-        if "message" in data and "successful_payment" in data["message"]:
-            chat_id = data["message"]["chat"]["id"]
-            charge_id = data["message"]["successful_payment"]["telegram_payment_charge_id"]
-
-            if chat_id in user_sessions:
-                text = user_sessions[chat_id]["text"]
-
-                requests.post(f"{TELEGRAM_URL}/sendMessage", json={
-                    "chat_id": chat_id,
-                    "text": "✅ Оплачено! Начинаю создание песни (займёт 2-3 минуты)..."
-                })
-
-                try:
-                    # Шаг 1: Генерация идеального MP3 через Яндекс (только текст)
-                    mp3_bytes = generate_yandex_tts(text)
-                    
-                    # Шаг 2: Загрузка в Suno и генерация песни
-                    track_url = upload_mp3_to_suno(mp3_bytes, "Chechen Song")
-                    
-                    # Шаг 3: Отправка пользователю
-                    requests.post(f"{TELEGRAM_URL}/sendMessage", json={
-                        "chat_id": chat_id,
-                        "text": f"🎶 Готово! Вот твоя песня:\n{track_url}"
-                    })
-
-                except Exception as e:
-                    logging.error(f"Error: {e}")
-                    refundStars(chat_id, charge_id)
-                    requests.post(f"{TELEGRAM_URL}/sendMessage", json={
-                        "chat_id": chat_id,
-                        "text": "❌ Ошибка. Звёзды возвращены."
-                    })
-
-                if chat_id in user_sessions:
-                    del user_sessions[chat_id]
-
-        return {"status": "ignored"}
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return {"status": "error"}
