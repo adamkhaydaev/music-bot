@@ -85,8 +85,8 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     
     upload_data = upload_response.json()
     
-    # Берём ссылку прямо из ответа
-    file_url = upload_data.get("downloadUrl")
+    # Берём ссылку из вложенного словаря data
+    file_url = upload_data.get("data", {}).get("downloadUrl")
     
     if not file_url:
         # Если ссылки нет — выводим весь ответ в логи и падаем
