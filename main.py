@@ -14,7 +14,7 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 SUNO_API_KEY = os.getenv("SUNO_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-PRICE_IN_STARS = 20
+PRICE_IN_STARS = 1
 
 # Временные сессии пользователей
 user_sessions = {}
