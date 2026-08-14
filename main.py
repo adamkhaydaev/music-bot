@@ -19,12 +19,28 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 # Цена за одну генерацию (в звёздах)
 PRICE_IN_STARS = 1
 
-# Хранилище временных данных пользователей (в памяти)
 user_sessions = {}
+
+def refundStars(chat_id: int, amount: int, telegram_payment_charge_id: str):
+    """
+    Отправляет запрос на возврат звёзд пользователю через Telegram API.
+    """
+    try:
+        url = f"{TELEGRAM_URL}/refundStarPayment"
+        payload = {
+            "user_id": chat_id,
+            "telegram_payment_charge_id": telegram_payment_charge_id
+        }
+        response = requests.post(url, json=payload)
+        logging.info(f"Ответ на возврат звёзд: {response.json()}")
+        return response.ok
+    except Exception as e:
+        logging.error(f"Ошибка при возврате звёзд: {str(e)}")
+        return False
 
 @app.get("/")
 def root():
-    return {"message": "Telegram bot with Stars payment is alive!"}
+    return {"message": "Telegram bot with Stars refund logic is alive!"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -53,7 +69,6 @@ async def webhook(request: Request):
 
             user_sessions[chat_id] = {"prompt": prompt, "paid": False}
 
-            # Создаём инвойс для оплаты звёздами
             invoice_data = {
                 "chat_id": chat_id,
                 "title": "Генерация музыки через Suno AI 🎵",
@@ -69,7 +84,6 @@ async def webhook(request: Request):
 
             response = requests.post(f"{TELEGRAM_URL}/sendInvoice", json=invoice_data)
             logging.info(f"Ответ sendInvoice: {response.json()}")
-            
             return {"status": "invoice_sent"}
 
         # Обработка успешной оплаты (PreCheckoutQuery)
@@ -84,6 +98,7 @@ async def webhook(request: Request):
         # Обработка подтверждения оплаты (Message с successful_payment)
         if "message" in data and "successful_payment" in data["message"]:
             chat_id = data["message"]["chat"]["id"]
+            telegram_payment_charge_id = data["message"]["successful_payment"]["telegram_payment_charge_id"]
             
             if chat_id in user_sessions:
                 user_sessions[chat_id]["paid"] = True
@@ -94,9 +109,7 @@ async def webhook(request: Request):
                     "text": "✅ Оплата получена! 🎧 Начинаю генерацию музыки, подожди немного..."
                 })
 
-                # --- ВЫЗОВ SUNO API С БЕЗОПАСНОЙ ОБРАБОТКОЙ ---
                 try:
-                    # АКТУАЛЬНЫЙ URL ДЛЯ SUNO (если этот не работает, замените его)
                     suno_url = "https://api.suno.ai/v1/generate"
                     headers = {
                         "Authorization": f"Bearer {SUNO_API_KEY}",
@@ -108,23 +121,19 @@ async def webhook(request: Request):
                         "style": "pop"
                     }
                     
-                    # Отправляем запрос
                     suno_response = requests.post(suno_url, json=payload, headers=headers, timeout=30)
                     
-                    # ЛОГИРУЕМ ЧТО ПРИШЛО ОТ SUNO (Статус и Текст)
-                    logging.info(f"=== ОТВЕТ SUNO API ===")
-                    logging.info(f"Статус код: {suno_response.status_code}")
-                    logging.info(f"Тело ответа: {suno_response.text}")
+                    logging.info(f"Статус код Suno: {suno_response.status_code}")
+                    logging.info(f"Тело ответа Suno: {suno_response.text}")
                     
-                    # Если код не 200, выбрасываем ошибку с текстом
+                    # Если ошибка -> возвращаем звёзды!
                     if suno_response.status_code != 200:
                         raise Exception(f"Suno вернул код {suno_response.status_code}: {suno_response.text}")
-                    
-                    # Пытаемся распарсить JSON
+
                     try:
                         suno_data = suno_response.json()
                     except json.JSONDecodeError:
-                        raise Exception(f"Ошибка JSON: Suno вернул не JSON, а: {suno_response.text[:200]}")
+                        raise Exception(f"Ошибка JSON: {suno_response.text[:200]}")
                     
                     track_url = suno_data.get("audio_url", "Ссылка не найдена :(")
                     
@@ -135,9 +144,18 @@ async def webhook(request: Request):
                     
                 except Exception as e:
                     logging.error(f"Ошибка при генерации: {str(e)}")
+                    
+                    # ВОЗВРАТ ЗВЁЗД В СЛУЧАЕ ОШИБКИ!
+                    refund_result = refundStars(chat_id, PRICE_IN_STARS, telegram_payment_charge_id)
+                    
+                    if refund_result:
+                        error_msg = f"❌ Ошибка при генерации. Мы вернули тебе {PRICE_IN_STARS} ⭐ обратно. Попробуй позже."
+                    else:
+                        error_msg = f"❌ Ошибка при генерации. К сожалению, не удалось автоматически вернуть звёзды. Пожалуйста, свяжист с поддержкой."
+                    
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
-                        "text": f"❌ Ошибка при генерации: {str(e)}"
+                        "text": error_msg
                     })
                 
                 if chat_id in user_sessions:
