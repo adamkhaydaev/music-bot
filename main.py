@@ -85,32 +85,33 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     
     upload_data = upload_response.json()
     
-    # Берём ссылку из вложенного словаря data
     file_url = upload_data.get("data", {}).get("downloadUrl")
-    
     if not file_url:
-        # Если ссылки нет — выводим весь ответ в логи и падаем
-        logging.error(f"ПОЛНЫЙ ОТВЕТ SUNO: {json.dumps(upload_data, indent=2)}")
-        raise Exception("Suno не вернул downloadUrl. Смотрите логи выше.")
+        raise Exception("Suno не вернул downloadUrl")
     
     logging.info(f"✅ Файл загружен: {file_url}")
     
-    cover_url = f"{SUNO_BASE}/api/cover-upload"
-    cover_payload = {
-        "fileUrl": file_url,
+    # ==========================================
+    # ТЕПЕРЬ ОТПРАВЛЯЕМ ЭТОТ ФАЙЛ В ГЕНЕРАЦИЮ
+    # ==========================================
+    generate_url = f"{SUNO_BASE}/api/generate"
+    generate_payload = {
+        "audioUrl": file_url,
         "title": title,
         "style": "Caucasian pop, emotional, male vocal",
-        "model": "V5_5"
+        "model": "V5_5",
+        "instrumental": False,
+        "customMode": True
     }
     
-    cover_response = requests.post(cover_url, headers=SUNO_HEAD, json=cover_payload, timeout=30)
-    if cover_response.status_code != 200:
-        raise Exception(f"Ошибка cover: {cover_response.text}")
+    generate_response = requests.post(generate_url, headers=SUNO_HEAD, json=generate_payload, timeout=30)
+    if generate_response.status_code != 200:
+        raise Exception(f"Ошибка генерации: {generate_response.text}")
     
-    cover_data = cover_response.json()
-    task_id = cover_data.get("data", {}).get("taskId")
+    generate_data = generate_response.json()
+    task_id = generate_data.get("data", {}).get("taskId")
     if not task_id:
-        raise Exception(f"Не найден taskId. Ответ: {cover_data}")
+        raise Exception(f"Не найден taskId. Ответ: {generate_data}")
     
     start_time = time.time()
     while time.time() - start_time < 300:
