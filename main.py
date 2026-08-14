@@ -68,10 +68,6 @@ def generate_yandex_tts(text: str):
 def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     """Загружает MP3 на сервер Suno через URL-метод (согласно документации)"""
     
-    # 1. Сначала загружаем файл через URL File Upload
-    # ВАЖНО: В документации указан эндпоинт /api/file-url-upload, но для этого нужна ссылка.
-    # Мы воспользуемся методом Stream Upload (работает напрямую с байтами)
-    
     upload_url = f"{SUNO_BASE}/api/file-stream-upload"
     files = {"file": ("voice.mp3", mp3_bytes, "audio/mpeg")}
     data = {"uploadPath": "voice-uploads"}
@@ -84,10 +80,7 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     file_url = upload_data["data"]["fileUrl"]
     logging.info(f"Файл успешно загружен в Suno: {file_url}")
     
-    # 2. Теперь отправляем этот файл на генерацию кавера (Upload And Cover Audio)
-    # Эндпоинт для Cover может быть другим, но по логике он должен быть в API.
-    # Если у вас есть точный эндпоинт Cover, замените его здесь.
-    cover_url = f"{SUNO_BASE}/api/cover-upload"  # Уточните путь в документации
+    cover_url = f"{SUNO_BASE}/api/cover-upload"
     cover_payload = {
         "fileUrl": file_url,
         "title": title,
@@ -104,7 +97,6 @@ def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     if not task_id:
         raise Exception("Не удалось получить taskId для генерации кавера")
     
-    # 3. Ждём завершения генерации (опрашиваем статус)
     start_time = time.time()
     while time.time() - start_time < 300:
         time.sleep(10)
@@ -143,38 +135,24 @@ async def webhook(request: Request):
             reply = (
                 "🎵 Привет! Я создаю песни на чеченском языке!\n\n"
                 f"Стоимость: {PRICE_IN_STARS} ⭐ за трек.\n\n"
-                "Отправь мне текст песни, и я сделаю голосовой файл.\n"
-                "Добавь в конце сообщения:\n"
-                "👨 - для мужского голоса\n"
-                "👩 - для женского голоса\n\n"
-                "Пример:\nЛайла йолу лаьмнаш 👨"
+                "Отправь мне текст песни, и я сделаю голосовой файл."
             )
             requests.post(f"{TELEGRAM_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
             return {"status": "ok"}
 
         if "message" in data and "text" in data["message"]:
             chat_id = data["message"]["chat"]["id"]
-            raw_text = data["message"]["text"]
+            text = data["message"]["text"]
 
-            if raw_text == "/start":
+            if text == "/start":
                 return {"status": "ok"}
 
-            # Определяем пол голоса
-            voice_gender = "male"
-            text = raw_text
-            if "👨" in raw_text:
-                voice_gender = "male"
-                text = raw_text.replace("👨", "").strip()
-            elif "👩" in raw_text:
-                voice_gender = "female"
-                text = raw_text.replace("👩", "").strip()
-
-            user_sessions[chat_id] = {"text": text, "gender": voice_gender}
+            user_sessions[chat_id] = {"text": text}
 
             invoice_data = {
                 "chat_id": chat_id,
                 "title": "Чеченская песня 🎤",
-                "description": f"Голос: {'Мужской' if voice_gender == 'male' else 'Женский'}",
+                "description": f"Создание трека по запросу: '{text[:30]}...'",
                 "payload": f"tts_{chat_id}",
                 "currency": "XTR",
                 "prices": [{"label": "1 трек", "amount": PRICE_IN_STARS}],
@@ -196,7 +174,6 @@ async def webhook(request: Request):
 
             if chat_id in user_sessions:
                 text = user_sessions[chat_id]["text"]
-                gender = user_sessions[chat_id]["gender"]
 
                 requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                     "chat_id": chat_id,
@@ -204,8 +181,8 @@ async def webhook(request: Request):
                 })
 
                 try:
-                    # Шаг 1: Генерация идеального MP3 через Яндекс
-                    mp3_bytes = generate_yandex_tts(text, gender)
+                    # Шаг 1: Генерация идеального MP3 через Яндекс (только текст)
+                    mp3_bytes = generate_yandex_tts(text)
                     
                     # Шаг 2: Загрузка в Suno и генерация песни
                     track_url = upload_mp3_to_suno(mp3_bytes, "Chechen Song")
