@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import time
 import logging
 from fastapi import FastAPI, Request
 
@@ -17,14 +18,20 @@ SUNO_API_KEY = os.getenv("SUNO_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # Цена за одну генерацию (в звёздах)
-PRICE_IN_STARS = 1
+PRICE_IN_STARS = 10
 
+# Хранилище временных данных пользователей
 user_sessions = {}
 
-def refundStars(chat_id: int, amount: int, telegram_payment_charge_id: str):
-    """
-    Отправляет запрос на возврат звёзд пользователю через Telegram API.
-    """
+# Базовый URL и заголовки для Suno API (как в вашем коде)
+BASE = "https://api.sunoapi.org"
+HEAD = {
+    "Authorization": f"Bearer {SUNO_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+def refundStars(chat_id: int, telegram_payment_charge_id: str):
+    """Возвращает звёзды пользователю при ошибке"""
     try:
         url = f"{TELEGRAM_URL}/refundStarPayment"
         payload = {
@@ -38,9 +45,69 @@ def refundStars(chat_id: int, amount: int, telegram_payment_charge_id: str):
         logging.error(f"Ошибка при возврате звёзд: {str(e)}")
         return False
 
+def generate_song(lyrics: str):
+    """Отправляет запрос на генерацию и ждёт результат"""
+    try:
+        # Шаг 1: Отправляем запрос на генерацию
+        body = {
+            "prompt": lyrics,
+            "style": "pop, male vocal, emotional",
+            "title": "My Song",
+            "customMode": True,
+            "instrumental": False,
+            "model": "V5_5",
+            "vocalGender": "m",
+            "callBackUrl": "https://example.com/callback"
+        }
+        
+        logging.info("Отправляем запрос на генерацию...")
+        resp = requests.post(f"{BASE}/api/v1/generate", headers=HEAD, json=body, timeout=30).json()
+        logging.info(f"Ответ на генерацию: {resp}")
+        
+        if resp.get("code") != 200:
+            raise Exception(f"Ошибка при старте генерации: {resp.get('msg')}")
+        
+        task_id = resp["data"]["taskId"]
+        logging.info(f"Получен taskId: {task_id}")
+        
+        # Шаг 2: Ждём, пока трек сгенерируется (опрашиваем каждые 12 секунд)
+        start_time = time.time()
+        while time.time() - start_time < 360:  # Ждём максимум 6 минут
+            time.sleep(12)
+            
+            status_resp = requests.get(
+                f"{BASE}/api/v1/generate/record-info", 
+                headers=HEAD,
+                params={"taskId": task_id}, 
+                timeout=30
+            ).json()
+            
+            data = status_resp.get("data", {})
+            status = (data.get("status") or "").upper()
+            
+            logging.info(f"Статус задачи: {status}")
+            
+            if status == "SUCCESS":
+                r = data.get("response", {}) or {}
+                tracks = r.get("sunoData") or r.get("data") or []
+                if tracks:
+                    track_url = tracks[0].get("audioUrl") or tracks[0].get("audio_url")
+                    if track_url:
+                        return track_url
+                    raise Exception("Трек получен, но ссылка не найдена")
+            
+            if "FAIL" in status or "ERROR" in status:
+                raise Exception(data.get("errorMessage") or status)
+        
+        raise Exception("Таймаут генерации (превышено время ожидания)")
+    
+    except Exception as e:
+        logging.error(f"Ошибка генерации: {str(e)}")
+        raise e
+
 @app.get("/")
 def root():
-    return {"message": "Telegram bot with Stars refund logic is alive!"}
+    return {"message": "Telegram bot with Suno AI generation is alive!"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -52,9 +119,9 @@ async def webhook(request: Request):
         if "message" in data and data["message"].get("text") == "/start":
             chat_id = data["message"]["chat"]["id"]
             reply = (
-                "🎵 Привет! Я музыкальный бот с оплатой звёздами.\n\n"
-                f"Стоимость одной генерации: {PRICE_IN_STARS} ⭐ Telegram Stars.\n\n"
-                "Просто отправь мне текст (промпт), и я пришлю тебе счёт на оплату."
+                "🎵 Привет! Я музыкальный бот.\n\n"
+                f"Стоимость генерации одного трека: {PRICE_IN_STARS} ⭐ Telegram Stars.\n\n"
+                "Просто отправь мне текст песни (промпт), и я пришлю счёт на оплату."
             )
             requests.post(f"{TELEGRAM_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
             return {"status": "ok"}
@@ -67,11 +134,13 @@ async def webhook(request: Request):
             if prompt == "/start":
                 return {"status": "ok"}
 
-            user_sessions[chat_id] = {"prompt": prompt, "paid": False}
+            # Сохраняем промпт в сессию
+            user_sessions[chat_id] = {"prompt": prompt}
 
+            # Создаём инвойс для оплаты звёздами
             invoice_data = {
                 "chat_id": chat_id,
-                "title": "Генерация музыки через Suno API 🎵",
+                "title": "Генерация музыки через Suno AI 🎵",
                 "description": f"Создание трека по запросу: '{prompt[:30]}...'",
                 "payload": f"generate_{chat_id}",
                 "currency": "XTR",
@@ -99,97 +168,43 @@ async def webhook(request: Request):
         if "message" in data and "successful_payment" in data["message"]:
             chat_id = data["message"]["chat"]["id"]
             telegram_payment_charge_id = data["message"]["successful_payment"]["telegram_payment_charge_id"]
-            
+
             if chat_id in user_sessions:
-                user_sessions[chat_id]["paid"] = True
                 prompt = user_sessions[chat_id]["prompt"]
                 
                 requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                     "chat_id": chat_id,
-                    "text": "✅ Оплата получена! 🎧 Начинаю генерацию музыки, подожди немного..."
+                    "text": "✅ Оплата получена! 🎧 Начинаю генерацию, это займёт до 2–3 минут..."
                 })
 
                 try:
-                    # ==========================================
-                    # БАЗОВЫЙ URL И ЗАГОЛОВКИ (КАК В ВАШЕМ СТАРОМ КОДЕ)
-                    # ==========================================
-                    BASE_URL = "https://api.sunoapi.org"
-                    headers = {
-                        "Authorization": f"Bearer {SUNO_API_KEY}",
-                        "Content-Type": "application/json"
-                    }
+                    # Запускаем генерацию
+                    track_url = generate_song(prompt)
                     
-                    # ВЫБЕРИТЕ ПУТЬ (ЭНДПОИНТ) ИЗ ТРЁХ ВАРИАНТОВ НИЖЕ:
-                    # Вариант A (самый частый):
-                    suno_url = BASE_URL + "/generate"
-                    
-                    # Вариант B (если нужен /music):
-                    # suno_url = BASE_URL + "/music"
-                    
-                    # Вариант C (если нужен /v1/generate):
-                    # suno_url = BASE_URL + "/v1/generate"
-
-                    # ПАРАМЕТРЫ ДЛЯ ГЕНЕРАЦИИ (если нужно, поменяйте поля)
-                    payload = {
-                        "prompt": prompt,
-                        "model": "V5_5",
-                        "duration": 30
-                    }
-                    
-                    suno_response = requests.post(suno_url, json=payload, headers=headers, timeout=120)
-                    
-                    logging.info(f"Статус код Suno: {suno_response.status_code}")
-                    logging.info(f"Тело ответа Suno: {suno_response.text}")
-                    
-                    # Если ошибка -> возвращаем звёзды!
-                    if suno_response.status_code != 200:
-                        raise Exception(f"Suno вернул код {suno_response.status_code}: {suno_response.text}")
-
-                    try:
-                        suno_data = suno_response.json()
-                        logging.info(f"ПОЛНЫЙ ОТВЕТ ОТ API: {json.dumps(suno_data, indent=2)}")
-                    except json.JSONDecodeError:
-                        raise Exception(f"Ошибка JSON: {suno_response.text[:200]}")
-                    
-                    # АВТОМАТИЧЕСКИЙ ПОИСК ССЫЛКИ НА ТРЕК
-                    track_url = None
-                    if "audio_url" in suno_data:
-                        track_url = suno_data["audio_url"]
-                    elif "url" in suno_data:
-                        track_url = suno_data["url"]
-                    elif "data" in suno_data and isinstance(suno_data["data"], list) and len(suno_data["data"]) > 0:
-                        track_url = suno_data["data"][0].get("url")
-                    
-                    if track_url is None:
-                        raise Exception(f"Не удалось найти ссылку в ответе: {suno_data}")
-                    
+                    # Отправляем результат пользователю
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
                         "text": f"🎶 Готово! Вот твой трек:\n{track_url}"
                     })
-                    
+
                 except Exception as e:
-                    logging.error(f"Ошибка при генерации: {str(e)}")
+                    logging.error(f"Ошибка генерации: {str(e)}")
                     
-                    # ВОЗВРАТ ЗВЁЗД В СЛУЧАЕ ОШИБКИ!
-                    refund_result = refundStars(chat_id, PRICE_IN_STARS, telegram_payment_charge_id)
-                    
-                    if refund_result:
-                        error_msg = f"❌ Ошибка при генерации. Мы вернули тебе {PRICE_IN_STARS} ⭐ обратно. Попробуй позже."
-                    else:
-                        error_msg = f"❌ Ошибка при генерации. К сожалению, не удалось автоматически вернуть звёзды. Пожалуйста, свяжись с поддержкой."
+                    # Возвращаем звёзды
+                    refundStars(chat_id, telegram_payment_charge_id)
                     
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
-                        "text": error_msg
+                        "text": "❌ Ошибка при генерации. Звёзды возвращены. Попробуй позже или измени текст."
                     })
-                
+
+                # Удаляем сессию
                 if chat_id in user_sessions:
                     del user_sessions[chat_id]
-                
+
                 return {"status": "ok"}
 
         return {"status": "ignored"}
     except Exception as e:
-        logging.error(f"Ошибка: {str(e)}")
+        logging.error(f"Ошибка webhook: {str(e)}")
         return {"status": "error"}
