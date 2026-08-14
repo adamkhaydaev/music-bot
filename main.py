@@ -17,7 +17,7 @@ SUNO_API_KEY = os.getenv("SUNO_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # Цена за одну генерацию (в звёздах)
-PRICE_IN_STARS = 200
+PRICE_IN_STARS = 0
 
 # Хранилище временных данных пользователей (в памяти)
 # В реальном проекте лучше использовать Redis или базу данных
