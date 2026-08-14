@@ -43,25 +43,34 @@ def refundStars(chat_id: int, telegram_payment_charge_id: str):
         return False
 
 def generate_yandex_tts(text: str, gender: str):
-    """Генерирует идеальный MP3 через Яндекс SpeechKit"""
     url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
     headers = {"Authorization": f"Api-Key {YANDEX_API_KEY}"}
     
-    voice = "alena" if gender == "female" else "filip"
+    # Списки голосов, которые точно есть у Яндекса
+    if gender == "female":
+        voices = ["oksana", "alena", "jane"]  # женские
+    else:
+        voices = ["alexander", "filip", "pavel"]  # мужские
     
-    params = {
-        "text": text,
-        "lang": "ru-RU",
-        "voice": voice,
-        "format": "mp3",
-        "emotion": "good"
-    }
+    # Перебираем голоса по очереди, пока не найдём рабочий
+    for voice in voices:
+        try:
+            params = {
+                "text": text,
+                "lang": "ru-RU",
+                "voice": voice,
+                "format": "mp3",
+                "emotion": "good"
+            }
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+            if response.status_code == 200:
+                logging.info(f"✅ Выбран голос: {voice}")
+                return response.content
+        except:
+            continue  # если этот не сработал, пробуем следующий
     
-    response = requests.get(url, headers=headers, params=params, timeout=30)
-    if response.status_code != 200:
-        raise Exception(f"Yandex TTS Error: {response.text}")
-    
-    return response.content  # Байты MP3-файла
+    # Если ни один голос не сработал
+    raise Exception("Не удалось найти рабочий мужской/женский голос в Яндексе")
 
 def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
     """Загружает MP3 на сервер Suno через URL-метод (согласно документации)"""
