@@ -53,15 +53,17 @@ def generate_elevenlabs_song(text: str):
     else:
         audio_data = data
 
-    # В логах мы видим, что ссылка лежит в поле "file"
+    # В логах ссылка лежит в поле "file"
     audio_url = audio_data.get("file")
     if not audio_url:
         raise Exception(f"Не удалось найти file в ответе: {data}")
     
+    # Скачиваем MP3 по прямой ссылке
     audio_response = requests.get(audio_url, timeout=60)
     if audio_response.status_code != 200:
         raise Exception(f"Ошибка скачивания аудио: {audio_response.text}")
     
+    # Готовим файл для отправки в Telegram
     files = {"audio": ("song.mp3", audio_response.content, "audio/mpeg")}
     return files
 
