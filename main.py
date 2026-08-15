@@ -1,8 +1,8 @@
 import os
 import requests
 import logging
-import time
 import json
+import time
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
@@ -26,37 +26,40 @@ def refundStars(chat_id: int, telegram_payment_charge_id: str):
         return False
 
 def generate_elevenlabs_song(text: str):
-    # Эндпоинт ElevenLabs для генерации звука
-    url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
+    url = "https://api.air.fail/public/audio/elevenlabs_music"
+    api_key = ELEVENLABS_API_KEY
+    
+    form_data = {
+        "content": text,
+        "info": json.dumps({
+            "duration": 60,
+            "force_instrumental": False
+        })
+    }
     
     headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": ELEVENLABS_API_KEY
+        "Authorization": api_key
     }
     
-    data = {
-        "text": text,
-        "model_id": "eleven_monolingual_v1",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.5,
-            "style": 0.3,
-            "use_speaker_boost": True
-        }
-    }
-    
-    response = requests.post(url, json=data, headers=headers, timeout=60)
+    response = requests.post(url, data=form_data, headers=headers, timeout=120)
     if response.status_code != 200:
-        raise Exception(f"ElevenLabs error: {response.text}")
+        raise Exception(f"ElevenLabs AIR error: {response.text}")
     
-    # Бот отправляет аудио в Telegram прямо из байтов
-    files = {"audio": ("song.mp3", response.content, "audio/mpeg")}
+    data = response.json()
+    audio_url = data.get("audio_url")
+    if not audio_url:
+        raise Exception(f"Не удалось найти audio_url в ответе: {data}")
+    
+    audio_response = requests.get(audio_url, timeout=60)
+    if audio_response.status_code != 200:
+        raise Exception(f"Ошибка скачивания аудио: {audio_response.text}")
+    
+    files = {"audio": ("song.mp3", audio_response.content, "audio/mpeg")}
     return files
 
 @app.get("/")
 def root():
-    return {"message": "Chechen Song Bot with ElevenLabs"}
+    return {"message": "Chechen Song Bot with ElevenLabs (via AIR)"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
