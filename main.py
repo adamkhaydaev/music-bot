@@ -46,9 +46,17 @@ def generate_elevenlabs_song(text: str):
         raise Exception(f"ElevenLabs AIR error: {response.text}")
     
     data = response.json()
-    audio_url = data.get("audio_url")
+    
+    # AIR возвращает список в квадратных скобках — берём первый элемент
+    if isinstance(data, list) and len(data) > 0:
+        audio_data = data[0]
+    else:
+        audio_data = data
+
+    # В логах мы видим, что ссылка лежит в поле "file"
+    audio_url = audio_data.get("file")
     if not audio_url:
-        raise Exception(f"Не удалось найти audio_url в ответе: {data}")
+        raise Exception(f"Не удалось найти file в ответе: {data}")
     
     audio_response = requests.get(audio_url, timeout=60)
     if audio_response.status_code != 200:
