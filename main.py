@@ -29,11 +29,11 @@ def generate_elevenlabs_song(text: str):
     # Эндпоинт ElevenLabs для генерации звука
     url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
     
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": ELEVENLABS_API_KEY
-    }
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": ELEVENLABS_API_KEY  # ЭТО ПРАВИЛЬНО ДЛЯ ELEVENLABS
+        }
     
     data = {
         "text": text,
