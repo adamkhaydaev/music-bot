@@ -6,34 +6,17 @@ import json
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
-app = FastAPI()  # <--- ОЧЕНЬ ВАЖНО: app должна быть создана здесь!
+app = FastAPI()
 
-# Переменные окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
-SUNO_API_KEY = os.getenv("SUNO_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 PRICE_IN_STARS = 1
 
-# Временные сессии пользователей
 user_sessions = {}
 
-# ================================
-# БАЗОВЫЕ НАСТРОЙКИ SUNO (ИЗ ВАШЕЙ ДОКУМЕНТАЦИИ)
-# ================================
-SUNO_BASE = "https://sunoapiorg.redpandaai.co"
-SUNO_HEAD = {
-    "Authorization": f"Bearer {SUNO_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# ================================
-# ФУНКЦИИ-ПОМОЩНИКИ
-# ================================
-
 def refundStars(chat_id: int, telegram_payment_charge_id: str):
-    """Возвращает звёзды пользователю при ошибке"""
     try:
         url = f"{TELEGRAM_URL}/refundStarPayment"
         payload = {"user_id": chat_id, "telegram_payment_charge_id": telegram_payment_charge_id}
@@ -42,103 +25,38 @@ def refundStars(chat_id: int, telegram_payment_charge_id: str):
     except:
         return False
 
-def generate_yandex_tts(text: str):
-    url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
-    headers = {"Authorization": f"Api-Key {YANDEX_API_KEY}"}
+def generate_elevenlabs_song(text: str):
+    # Эндпоинт ElevenLabs для генерации звука
+    url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
     
-    # Сначала пробуем мужской голос (alexander). Если нет — женский (oksana).
-    for voice in ["alexander", "oksana"]:
-        try:
-            params = {
-                "text": text,
-                "lang": "ru-RU",
-                "voice": voice,
-                "format": "mp3",
-                "emotion": "good"
-            }
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-            if response.status_code == 200:
-                logging.info(f"✅ Бот выбрал голос: {voice}")
-                return response.content
-        except:
-            continue
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
     
-    raise Exception("Не удалось найти рабочий голос в Яндексе")
-
-def upload_mp3_to_suno(mp3_bytes: bytes, title: str):
-    upload_url = f"{SUNO_BASE}/api/file-stream-upload"
-    
-    files = {"file": ("voice.mp3", mp3_bytes, "audio/mpeg")}
     data = {
-        "uploadPath": "voice-uploads",
-        "fileName": "voice.mp3",
-        "title": title,
-        "style": "Caucasian pop, emotional, male vocal",
-        "model": "V5_5"
+        "text": text,
+        "model_id": "eleven_monolingual_v1",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.5,
+            "style": 0.3,
+            "use_speaker_boost": True
+        }
     }
     
-    upload_headers = {"Authorization": f"Bearer {SUNO_API_KEY}"}
-    upload_response = requests.post(upload_url, headers=upload_headers, data=data, files=files)
+    response = requests.post(url, json=data, headers=headers, timeout=60)
+    if response.status_code != 200:
+        raise Exception(f"ElevenLabs error: {response.text}")
     
-    if upload_response.status_code != 200:
-        raise Exception(f"Ошибка загрузки: {upload_response.text}")
-    
-    upload_data = upload_response.json()
-    
-    file_url = upload_data.get("data", {}).get("downloadUrl")
-    if not file_url:
-        raise Exception("Suno не вернул downloadUrl")
-    
-    logging.info(f"✅ Файл загружен: {file_url}")
-    
-    # ==========================================
-    # ТЕПЕРЬ ОТПРАВЛЯЕМ ЭТОТ ФАЙЛ В ГЕНЕРАЦИЮ
-    # ==========================================
-    generate_url = f"{SUNO_BASE}/api/generate"
-    generate_payload = {
-        "audioUrl": file_url,
-        "title": title,
-        "style": "Caucasian pop, emotional, male vocal",
-        "model": "V5_5",
-        "instrumental": False,
-        "customMode": True
-    }
-    
-    generate_response = requests.post(generate_url, headers=SUNO_HEAD, json=generate_payload, timeout=30)
-    if generate_response.status_code != 200:
-        raise Exception(f"Ошибка генерации: {generate_response.text}")
-    
-    generate_data = generate_response.json()
-    task_id = generate_data.get("data", {}).get("taskId")
-    if not task_id:
-        raise Exception(f"Не найден taskId. Ответ: {generate_data}")
-    
-    start_time = time.time()
-    while time.time() - start_time < 300:
-        time.sleep(10)
-        status_url = f"{SUNO_BASE}/api/generate/record-info"
-        status_resp = requests.get(status_url, headers=SUNO_HEAD, params={"taskId": task_id})
-        status_data = status_resp.json().get("data", {})
-        status = (status_data.get("status") or "").upper()
-        
-        if status == "SUCCESS":
-            tracks = status_data.get("response", {}).get("sunoData", [])
-            if tracks:
-                track_url = tracks[0].get("audioUrl")
-                if track_url:
-                    return track_url
-        elif "FAIL" in status or "ERROR" in status:
-            raise Exception(status_data.get("errorMessage") or status)
-    
-    raise Exception("Таймаут ожидания")
-
-# ================================
-# ОСНОВНОЙ ВЕБХУК
-# ================================
+    # Бот отправляет аудио в Telegram прямо из байтов
+    files = {"audio": ("song.mp3", response.content, "audio/mpeg")}
+    return files
 
 @app.get("/")
 def root():
-    return {"message": "Chechen Song Bot with Yandex TTS + Suno Cover"}
+    return {"message": "Chechen Song Bot with ElevenLabs"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -151,7 +69,7 @@ async def webhook(request: Request):
             reply = (
                 "🎵 Привет! Я создаю песни на чеченском языке!\n\n"
                 f"Стоимость: {PRICE_IN_STARS} ⭐ за трек.\n\n"
-                "Отправь мне текст песни, и я сделаю голосовой файл."
+                "Отправь мне текст песни, и я сделаю готовую песню."
             )
             requests.post(f"{TELEGRAM_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
             return {"status": "ok"}
@@ -168,7 +86,7 @@ async def webhook(request: Request):
             invoice_data = {
                 "chat_id": chat_id,
                 "title": "Чеченская песня 🎤",
-                "description": f"Создание трека по запросу: '{text[:30]}...'",
+                "description": f"Трек по запросу: '{text[:30]}...'",
                 "payload": f"tts_{chat_id}",
                 "currency": "XTR",
                 "prices": [{"label": "1 трек", "amount": PRICE_IN_STARS}],
@@ -193,20 +111,15 @@ async def webhook(request: Request):
 
                 requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                     "chat_id": chat_id,
-                    "text": "✅ Оплачено! Начинаю создание песни (займёт 2-3 минуты)..."
+                    "text": "✅ Оплачено! Начинаю создание песни (займёт 30-60 секунд)..."
                 })
 
                 try:
-                    # Шаг 1: Генерация идеального MP3 через Яндекс (только текст)
-                    mp3_bytes = generate_yandex_tts(text)
-                    
-                    # Шаг 2: Загрузка в Suno и генерация песни
-                    track_url = upload_mp3_to_suno(mp3_bytes, "Chechen Song")
-                    
-                    # Шаг 3: Отправка пользователю
+                    song_files = generate_elevenlabs_song(text)
+                    requests.post(f"{TELEGRAM_URL}/sendAudio", data={"chat_id": chat_id}, files=song_files)
                     requests.post(f"{TELEGRAM_URL}/sendMessage", json={
                         "chat_id": chat_id,
-                        "text": f"🎶 Готово! Вот твоя песня:\n{track_url}"
+                        "text": "🎶 Готово! Вот твоя песня!"
                     })
 
                 except Exception as e:
